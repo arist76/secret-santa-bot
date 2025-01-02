@@ -24,8 +24,8 @@ class User:
 class Group:
     def __init__(self, id: str, admin: User):
         self.id = id
-        self.admin = User
-        self.users = []
+        self.admin: User = admin
+        self.users: list[User] = []
         self.settings = Settings()
 
 
@@ -37,7 +37,7 @@ class Settings:
 
 
 # Store groups (persistent storage would be better)
-groups = {}
+groups: dict[str, Group] = {}
 
 GROUP_PREFIX = "group_"
 GROUP_PENDING_PREFIX = "pending_"
@@ -120,6 +120,7 @@ async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.message
 
     username = update.effective_user.username
+
     for group in groups.values():
         for user in group.users:
             if user.username == username:
@@ -147,6 +148,32 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Include Admin in Matching: {settings.include_admin}"
                 )
                 await update.message.reply_text(settings_text)
+
+                keyboard = [
+                    [
+                        InlineKeyboardButton(
+                            "Change Deadline", callback_data="change_deadline"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "Toggle Accept Odd Participants",
+                            callback_data="toggle_accept_odd",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "Toggle Include Admin", callback_data="toggle_include_admin"
+                        )
+                    ],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                is_admin = group.admin.username == username
+
+                await update.message.reply_text(
+                    settings_text, reply_markup=(reply_markup if is_admin else None)
+                )
                 return
 
     await update.message.reply_text("You are not part of any group.")
