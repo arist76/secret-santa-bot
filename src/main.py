@@ -1,17 +1,25 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
-                          ContextTypes, MessageHandler, filters)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 from datetime import datetime, timedelta
-import random
+import secrets
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
+
 
 # Data Models
 class User:
     def __init__(self, username: str, is_admin: bool = False):
         self.username = username
+
 
 class Group:
     def __init__(self, id: str, admin: User):
@@ -31,10 +39,15 @@ class Settings:
 # Store groups (persistent storage would be better)
 groups = {}
 
+GROUP_PREFIX = "group_"
+GROUP_PENDING_PREFIX = "pending_"
+
 
 # Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to the Secret Santa Bot! Use /help for available commands.")
+    await update.message.reply_text(
+        "Welcome to the Secret Santa Bot! Use /help for available commands."
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,12 +63,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.effective_user and update.effective_user.username
+    assert update.message
+
     admin = User(username=update.effective_user.username)
-    group_id = f"group_{random.randint(1000, 9999)}"  # user secrets with 7 character token
+    group_id = f"{GROUP_PREFIX}{secrets.token_hex(4)}"
     group = Group(id=group_id, admin=admin)
     groups[group_id] = group
 
-    await update.message.reply_text(f"Group created successfully! Your group ID is: {group_id}")
+    await update.message.reply_text(
+        f"Group created successfully! Your group ID is: {group_id}"
+    )
 
 
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,7 +96,9 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group.users.append(user)
     user.group = group
 
-    await update.message.reply_text(f"You have requested to join group {group_id}. Please wait for admin approval.")
+    await update.message.reply_text(
+        f"You have requested to join group {group_id}. Please wait for admin approval."
+    )
 
 
 async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -124,7 +144,9 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
 
     if not admin_group:
-        await update.message.reply_text("You are not an admin or not part of any group.")
+        await update.message.reply_text(
+            "You are not an admin or not part of any group."
+        )
         return
 
     group = admin_group
@@ -137,13 +159,16 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     random.shuffle(users)
-    matches = {users[i].username: users[(i + 1) % len(users)].username for i in range(len(users))}
+    matches = {
+        users[i].username: users[(i + 1) % len(users)].username
+        for i in range(len(users))
+    }
 
     for user in group.users:
         if user.username in matches:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"Hi {user.username}, your Secret Santa match is {matches[user.username]}!"
+                text=f"Hi {user.username}, your Secret Santa match is {matches[user.username]}!",
             )
 
 
