@@ -83,25 +83,32 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
+    assert context.args is not None
 
-    if context.args and len(context.args) != 1:
+    if len(context.args) < 1:
         await update.message.reply_text("Usage: /join_group <group_id>")
         return
 
     group_id = context.args[0]
-    if group_id not in groups:
+    if get_group_id(group_id) not in groups:
         await update.message.reply_text("Invalid group ID.")
         return
 
-    group = groups[group_id]
+    group = groups[get_group_id(group_id)]
+    group_pending = groups[get_pending_group_id(group_id)]
     user = User(username=update.effective_user.username)
+
+    if user in group_pending.users:
+        await update.message.reply_text(
+            "You have already requested to join this group. and your request is still pending."
+        )
+        return
 
     if user in group.users:
         await update.message.reply_text("You are already in the group.")
         return
 
-    group.users.append(user)
-    user.group = group
+    group_pending.users.append(user)
 
     await update.message.reply_text(
         f"You have requested to join group {group_id}. Please wait for admin approval."
@@ -186,6 +193,15 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=update.effective_chat.id,
                 text=f"Hi {user.username}, your Secret Santa match is {matches[user.username]}!",
             )
+
+
+# Helper functions
+def get_group_id(group_id: str):
+    return GROUP_PREFIX + group_id
+
+
+def get_pending_group_id(group_id: str):
+    return GROUP_PENDING_PREFIX + group_id
 
 
 # Main Function
