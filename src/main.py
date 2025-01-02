@@ -12,6 +12,8 @@ from telegram.ext import (
 from datetime import datetime, timedelta
 import secrets
 import random
+import os
+from dotenv import load_dotenv
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
@@ -19,8 +21,8 @@ logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
 
 # Data Models
 class User:
-    def __init__(self, username: str, is_admin: bool = False):
-        self.username = username
+    def __init__(self, user_id: int, is_admin: bool = False):
+        self.user_id = user_id
 
 
 class Group:
@@ -69,15 +71,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("Create group command called")
-    assert update.effective_user and update.effective_user.username
+    assert update.effective_user and update.effective_user.id
     assert update.message
     groups: dict[str, Group] = context.bot_data
 
-    admin = User(username=update.effective_user.username)
+    admin = User(user_id=update.effective_user.id)
     group_id = f"{GROUP_PREFIX}{secrets.token_hex(4)}"
     group = Group(id=group_id, admin=admin)
     groups[group_id] = group
-    logging.info(f"Created group {group_id} by {update.effective_user.username}")
+    logging.info(f"Created group {group_id} by {update.effective_user.id}")
 
     await update.message.reply_text(
         f"Group created successfully! Your group ID is: {group_id}"
@@ -86,7 +88,7 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("Join group command called")
-    assert update.effective_user and update.effective_user.username
+    assert update.effective_user and update.effective_user.id
     assert update.message
     assert context.args is not None
     groups: dict[str, Group] = context.bot_data
@@ -98,14 +100,19 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     group_id = context.args[0]
     logging.info(f"Join group has group id {group_id}")
-    if get_group_id(group_id) not in groups:
+    if group_id not in groups:
         logging.info(f"Join group has invalid group id {group_id}")
         await update.message.reply_text("Invalid group ID.")
         return
 
-    group = groups[get_group_id(group_id)]
-    group_pending = groups[get_pending_group_id(group_id)]
-    user = User(username=update.effective_user.username)
+    group = groups[group_id]
+    group_pending = groups[group_id]
+    user = User(user_id=update.effective_user.id)
+
+    if group.admin.user_id == user.user_id:
+        logging.info(f"Join group failed because user is admin")
+        await update.message.reply_text("You cannot join your own group.")
+        return
 
     if user in group_pending.users:
         logging.info(f"Join group failed becuase user has already requested to join")
@@ -131,21 +138,21 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"Leave group command called")
-    assert update.effective_user and update.effective_user.username
+    assert update.effective_user and update.effective_user.id
     assert update.message
     groups: dict[str, Group] = context.bot_data
 
-    username = update.effective_user.username
+    user_id = update.effective_user.id
 
     for group in groups.values():
         for user in group.users:
-            if user.username == username:
+            if user.user_id == user_id:
                 # also remove from request
 
                 # TODO: admin cannot leave group
 
                 logging.info(
-                    f"Leave group successful with user {username} leaving group {group.id}"
+                    f"Leave group successful with user {user_id} leaving group {group.id}"
                 )
                 group.users.remove(user)
                 await update.message.reply_text("You have left the group.")
@@ -157,14 +164,14 @@ async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"settings command called")
-    assert update.effective_user and update.effective_user.username
+    assert update.effective_user and update.effective_user.id
     assert update.message
     groups: dict[str, Group] = context.bot_data
 
-    username = update.effective_user.username
+    user_id = update.effective_user.id
     for group in groups.values():
         for user in group.users:
-            if user.username == username:  # add this logic in a permission decorator
+            if user.user_id == user_id:  # add this logic in a permission decorator
                 settings = group.settings
                 settings_text = (
                     f"Settings:\n"
@@ -193,7 +200,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
 
-                is_admin = group.admin.username == username
+                is_admin = group.admin.user_id == user_id
 
                 logging.info(
                     f"settings command successfull"
@@ -208,7 +215,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    assert update.effective_user and update.effective_user.username
+    assert update.effective_user and update.effective_user.id
     assert update.callback_query
 
     groups: dict[str, Group] = context.bot_data
@@ -216,10 +223,10 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
 
     await query.answer()
 
-    username = update.effective_user.username
+    user_id = update.effective_user.id
 
     for group in groups.values():
-        if group.admin.username == username:
+        if group.admin.user_id == user_id:
             if query.data == "change_deadline":
                 group.settings.deadline += timedelta(days=1)
                 await query.edit_message_text(
@@ -244,18 +251,19 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    assert update.effective_user and update.effective_user.username
+    assert update.effective_user and update.effective_user.id
+    assert update.effective_chat
     assert update.message
     groups: dict[str, Group] = context.bot_data
 
-    username = update.effective_user.username
+    user_id = update.effective_user.id
 
     # Find the group of the admin
     admin_group = None
     for group in groups.values():
         for user in group.users:
-            is_admin = group.admin.username == username
-            if user.username == username and is_admin:
+            is_admin = group.admin.user_id == user_id
+            if user.user_id == user_id and is_admin:
                 admin_group = group
                 break
 
@@ -269,7 +277,7 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = group.users.copy()
 
     if not group.settings.include_admin:
-        users = [user for user in users if not user.is_admin]
+        users = [user for user in users if not user.user_id == group.admin.user_id]
 
     if len(users) < 2:
         await update.message.reply_text("Not enough participants for matching.")
@@ -277,34 +285,37 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     random.shuffle(users)
     matches = {
-        users[i].username: users[(i + 1) % len(users)].username
-        for i in range(len(users))
+        users[i].user_id: users[(i + 1) % len(users)].user_id for i in range(len(users))
     }
 
     for user in group.users:
-        if user.username in matches:
+        if user.user_id in matches:
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
-                text=f"Hi {user.username}, your Secret Santa match is {matches[user.username]}!",
+                text=f"Hi {user.user_id}, your Secret Santa match is {matches[user.user_id]}!",
             )
 
 
 # Helper functions
-def get_group_id(group_id: str):
-    return GROUP_PREFIX + group_id
-
-
-def get_pending_group_id(group_id: str):
-    return GROUP_PENDING_PREFIX + group_id
+# def get_group_id(group_id: str):
+#     return GROUP_PREFIX + group_id
+#
+#
+# def get_pending_group_id(group_id: str):
+#     return GROUP_PENDING_PREFIX + group_id
 
 
 # Main Function
 def main():
+    load_dotenv()
 
     persistence = PicklePersistence(filepath="group-storage.pickle")
 
     application = (
-        Application.builder().token("YOUR_BOT_TOKEN").persistence(persistence).build()
+        Application.builder()
+        .token(os.environ["BOT_TOKEN"])
+        .persistence(persistence)
+        .build()
     )
 
     application.add_handler(CommandHandler("start", start))
@@ -314,6 +325,7 @@ def main():
     application.add_handler(CommandHandler("leave_group", leave_group))
     application.add_handler(CommandHandler("settings", settings))
     application.add_handler(CommandHandler("start_matching", start_matching))
+    application.add_handler(CallbackQueryHandler(handle_settings_change))
 
     application.run_polling()
 
