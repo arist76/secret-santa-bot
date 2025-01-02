@@ -6,6 +6,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     MessageHandler,
+    PicklePersistence,
     filters,
 )
 from datetime import datetime, timedelta
@@ -35,9 +36,6 @@ class Settings:
         self.accept_odd = False
         self.include_admin = False
 
-
-# Store groups (persistent storage would be better)
-groups: dict[str, Group] = {}
 
 GROUP_PREFIX = "group_"
 GROUP_PENDING_PREFIX = "pending_"
@@ -69,6 +67,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
+    groups = context.bot_data
 
     admin = User(username=update.effective_user.username)
     group_id = f"{GROUP_PREFIX}{secrets.token_hex(4)}"
@@ -84,6 +83,7 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
     assert context.args is not None
+    groups = context.bot_data
 
     if len(context.args) < 1:
         await update.message.reply_text("Usage: /join_group <group_id>")
@@ -118,6 +118,7 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
+    groups = context.bot_data
 
     username = update.effective_user.username
 
@@ -135,6 +136,7 @@ async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
+    groups = context.bot_data
 
     username = update.effective_user.username
     for group in groups.values():
@@ -182,14 +184,17 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
+    groups = context.bot_data
 
     username = update.effective_user.username
 
     # Find the group of the admin
     admin_group = None
+
     for group in groups.values():
         for user in group.users:
-            if user.username == username and user.is_admin:
+            is_admin = group.admin.username == username
+            if user.username == username and is_admin:
                 admin_group = group
                 break
 
@@ -201,6 +206,7 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     group = admin_group
     users = group.users.copy()
+
     if not group.settings.include_admin:
         users = [user for user in users if not user.is_admin]
 
@@ -233,7 +239,12 @@ def get_pending_group_id(group_id: str):
 
 # Main Function
 def main():
-    application = Application.builder().token("YOUR_BOT_TOKEN").build()
+
+    persistence = PicklePersistence(filepath="group-storage.pickle")
+
+    application = (
+        Application.builder().token("YOUR_BOT_TOKEN").persistence(persistence).build()
+    )
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
