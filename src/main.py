@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 from datetime import datetime, timedelta
 import secrets
+import random
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
@@ -43,6 +44,7 @@ GROUP_PENDING_PREFIX = "pending_"
 
 # Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Bot started")
     assert update.message
 
     await update.message.reply_text(
@@ -51,6 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Help command called")
     assert update.message
 
     help_text = (
@@ -65,14 +68,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Create group command called")
     assert update.effective_user and update.effective_user.username
     assert update.message
-    groups = context.bot_data
+    groups: dict[str, Group] = context.bot_data
 
     admin = User(username=update.effective_user.username)
     group_id = f"{GROUP_PREFIX}{secrets.token_hex(4)}"
     group = Group(id=group_id, admin=admin)
     groups[group_id] = group
+    logging.info(f"Created group {group_id} by {update.effective_user.username}")
 
     await update.message.reply_text(
         f"Group created successfully! Your group ID is: {group_id}"
@@ -80,17 +85,21 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Join group command called")
     assert update.effective_user and update.effective_user.username
     assert update.message
     assert context.args is not None
-    groups = context.bot_data
+    groups: dict[str, Group] = context.bot_data
 
     if len(context.args) < 1:
+        logging.info("Join group has no arguments")
         await update.message.reply_text("Usage: /join_group <group_id>")
         return
 
     group_id = context.args[0]
+    logging.info(f"Join group has group id {group_id}")
     if get_group_id(group_id) not in groups:
+        logging.info(f"Join group has invalid group id {group_id}")
         await update.message.reply_text("Invalid group ID.")
         return
 
@@ -99,16 +108,21 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = User(username=update.effective_user.username)
 
     if user in group_pending.users:
+        logging.info(f"Join group failed becuase user has already requested to join")
         await update.message.reply_text(
             "You have already requested to join this group. and your request is still pending."
         )
         return
 
     if user in group.users:
+        logging.info(f"Join group failed because user has already joined")
         await update.message.reply_text("You are already in the group.")
         return
 
+    logging.info(f"Join group succesfully added to a pending group")
     group_pending.users.append(user)
+
+    # TODO: send message to admin to accept the user
 
     await update.message.reply_text(
         f"You have requested to join group {group_id}. Please wait for admin approval."
@@ -116,9 +130,10 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info(f"Leave group command called")
     assert update.effective_user and update.effective_user.username
     assert update.message
-    groups = context.bot_data
+    groups: dict[str, Group] = context.bot_data
 
     username = update.effective_user.username
 
@@ -126,17 +141,25 @@ async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for user in group.users:
             if user.username == username:
                 # also remove from request
+
+                # TODO: admin cannot leave group
+
+                logging.info(
+                    f"Leave group successful with user {username} leaving group {group.id}"
+                )
                 group.users.remove(user)
                 await update.message.reply_text("You have left the group.")
                 return
 
+    logging.info(f"Leave group failed because user has no group")
     await update.message.reply_text("You are not part of any group.")
 
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info(f"settings command called")
     assert update.effective_user and update.effective_user.username
     assert update.message
-    groups = context.bot_data
+    groups: dict[str, Group] = context.bot_data
 
     username = update.effective_user.username
     for group in groups.values():
@@ -149,7 +172,6 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Accept Odd Participants: {settings.accept_odd}\n"
                     f"Include Admin in Matching: {settings.include_admin}"
                 )
-                await update.message.reply_text(settings_text)
 
                 keyboard = [
                     [
@@ -173,6 +195,10 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 is_admin = group.admin.username == username
 
+                logging.info(
+                    f"settings command successfull"
+                    + (" admin buttons" if is_admin else "")
+                )
                 await update.message.reply_text(
                     settings_text, reply_markup=(reply_markup if is_admin else None)
                 )
@@ -181,16 +207,51 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("You are not part of any group.")
 
 
+async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.effective_user and update.effective_user.username
+    assert update.callback_query
+
+    groups: dict[str, Group] = context.bot_data
+    query = update.callback_query
+
+    await query.answer()
+
+    username = update.effective_user.username
+
+    for group in groups.values():
+        if group.admin.username == username:
+            if query.data == "change_deadline":
+                group.settings.deadline += timedelta(days=1)
+                await query.edit_message_text(
+                    f"Deadline updated to: {group.settings.deadline}"
+                )
+
+            elif query.data == "toggle_accept_odd":
+                group.settings.accept_odd = not group.settings.accept_odd
+                await query.edit_message_text(
+                    f"Accept Odd Participants set to: {group.settings.accept_odd}"
+                )
+
+            elif query.data == "toggle_include_admin":
+                group.settings.include_admin = not group.settings.include_admin
+                await query.edit_message_text(
+                    f"Include Admin in Matching set to: {group.settings.include_admin}"
+                )
+
+            return
+
+    await query.edit_message_text("You do not have permission to change settings.")
+
+
 async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.username
     assert update.message
-    groups = context.bot_data
+    groups: dict[str, Group] = context.bot_data
 
     username = update.effective_user.username
 
     # Find the group of the admin
     admin_group = None
-
     for group in groups.values():
         for user in group.users:
             is_admin = group.admin.username == username
