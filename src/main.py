@@ -45,12 +45,16 @@ GROUP_PENDING_PREFIX = "pending_"
 
 # Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.message
+
     await update.message.reply_text(
         "Welcome to the Secret Santa Bot! Use /help for available commands."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.message
+
     help_text = (
         "Available Commands:\n"
         "/create_group - Create a new Secret Santa group\n"
@@ -77,7 +81,10 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
+    assert update.effective_user and update.effective_user.username
+    assert update.message
+
+    if context.args and len(context.args) != 1:
         await update.message.reply_text("Usage: /join_group <group_id>")
         return
 
@@ -102,6 +109,9 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.effective_user and update.effective_user.username
+    assert update.message
+
     username = update.effective_user.username
     for group in groups.values():
         for user in group.users:
@@ -115,6 +125,9 @@ async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.effective_user and update.effective_user.username
+    assert update.message
+
     username = update.effective_user.username
     for group in groups.values():
         for user in group.users:
@@ -133,6 +146,9 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    assert update.effective_user and update.effective_user.username
+    assert update.message
+
     username = update.effective_user.username
 
     # Find the group of the admin
