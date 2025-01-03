@@ -9,7 +9,6 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     PicklePersistence,
-    TypeHandler,
     filters,
 )
 from datetime import datetime, timedelta
