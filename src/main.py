@@ -18,10 +18,13 @@ import os
 from dotenv import load_dotenv
 import time
 
+load_dotenv()
+
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
 
 BOT_USER_NAME = "t.me/gena_secret_santa_bot"
+PERSISTENCE_FILE = os.environ.get("PERSISTENT_PICKLE_PATH", "")
 
 
 # Data Models
@@ -488,9 +491,8 @@ def dictize(people_list):
 
 # Main Function
 def main():
-    load_dotenv()
 
-    persistence = PicklePersistence(filepath="group-storage.pickle")
+    persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
 
     application = (
         Application.builder()
