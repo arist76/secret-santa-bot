@@ -415,7 +415,7 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_settings_message(settings: Settings):
     return (
         f"Settings:\n"
-        f"Deadline: {settings.deadline.strftime("%Y-%m-%d %H:%M")}\n"
+        f"Deadline: {settings.deadline.strftime('%Y-%m-%d %H:%M')}\n"
         f"Accept Odd Participants: {settings.accept_odd}\n"
         f"Include Admin in Matching: {settings.include_admin}"
     )
