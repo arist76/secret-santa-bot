@@ -1,5 +1,6 @@
 import logging
 from copy import deepcopy
+from typing import Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -16,6 +17,7 @@ import secrets
 import random
 import os
 from dotenv import load_dotenv
+import time
 
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
@@ -265,6 +267,7 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
     user_id = update.effective_user.id
 
     if query.data and query.data.startswith("accept@"):
+        print("accepting user!!!")
         user_details = query.data.split("@")[1].split("#")
         requesting_user_id = user_details[0]
         first_name = user_details[1]
@@ -272,11 +275,15 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
             if group.admin.user_id == user_id and group.id.startswith(
                 GROUP_PENDING_PREFIX
             ):
+                print(
+                    f"Removing user {requesting_user_id} from pending group {group.id}"
+                )
                 group.users = list(
                     filter(lambda x: x.user_id != requesting_user_id, group.users)
                 )
 
             if group.admin.user_id == user_id and group.id.startswith(GROUP_PREFIX):
+                print(f"Adding user {requesting_user_id} to group {group.id}")
                 group.users.append(
                     User(user_id=int(requesting_user_id), first_name=first_name)
                 )
@@ -296,14 +303,10 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
             elif query.data == "toggle_accept_odd":
                 group.settings.accept_odd = not group.settings.accept_odd
 
-
             elif query.data == "toggle_include_admin":
                 group.settings.include_admin = not group.settings.include_admin
 
-            print(group.id)
             context.bot_data[group.id] = group
-            print(group.settings.include_admin)
-            print(group.settings.accept_odd)
 
             reply_markup = InlineKeyboardMarkup(get_settings_keyboard())
             settings_message = get_settings_message(group.settings)
@@ -382,16 +385,13 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     random.shuffle(users)
-    matches = {
-        users[i].user_id: users[(i + 1) % len(users)].user_id for i in range(len(users))
-    }
+    pairings = secret_santa_pairing(users)
 
-    for user in group.users:
-        if user.user_id in matches:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"Hi {user.first_name}, your Secret Santa match is {matches[user.user_id]}!",
-            )
+    for giver, receiver in pairings.items():
+        await context.bot.send_message(
+            chat_id=giver.user_id,
+            text=f"You're Secret Santa match is {receiver.first_name}!\n",
+        )
 
 
 # Helper functions
@@ -427,6 +427,54 @@ def get_settings_keyboard():
             )
         ],
     ]
+
+
+def secret_santa_pairing(users: list[User]) -> dict[User, User]:
+    """
+    Assigns Secret Santa pairs from a list of users.
+
+    Args:
+        users (list): List of User objects.
+
+    Returns:
+        dict: A dictionary with users as keys and their assigned giftees as values.
+    """
+    pairs = loop(users, {})
+
+    return pairs
+
+
+TIMEOUT = 0.2
+
+random.seed()
+
+
+def loop(users: list[User], invalid_links):
+    """Determine who gives to whom. `people`: a list of Person objects. `invalid_links`: a dict that defines who
+    can't give to whom. Returns a dict. Raises SolvingError if it cannot solve."""
+    start_time = time.time()
+    random.shuffle(users)
+    while not is_valid(dictize(users), invalid_links):
+        random.shuffle(users)
+        if start_time + TIMEOUT < time.time():
+            raise ValueError("Could not solve.")
+    return dictize(users)
+
+
+def is_valid(people_dict, invalid_links):
+    for gifter, giftee in people_dict.items():
+        if giftee in invalid_links.get(gifter, ()):
+            return False
+    return True
+
+
+def dictize(people_list):
+    people = {}
+    last_person = people_list[-1]
+    for this_person in people_list:
+        people[last_person] = this_person
+        last_person = this_person
+    return people
 
 
 # Main Function
