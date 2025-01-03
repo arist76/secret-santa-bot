@@ -22,6 +22,8 @@ import time
 # Enable logging
 logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
 
+BOT_USER_NAME = "t.me/gena_secret_santa_bot"
+
 
 # Data Models
 class User:
@@ -52,6 +54,14 @@ GROUP_PENDING_PREFIX = "pending_"
 # Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("Bot started")
+    args = context.args
+
+    print(f"start command called with args {args}")
+    if args and len(args) > 0:
+        print("executing start to join_gorup")
+        # execute the join_gorup command
+        await join_group(update, context)
+
     assert update.message
 
     await update.message.reply_text(
@@ -107,7 +117,7 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info(f"Created group {group_id} by {update.effective_user.id}")
 
     await update.message.reply_text(
-        f"Group created successfully! Your group ID is: {group_id}"
+        f"Group created successfully! Your group ID is: {group_id}\nShare this for others to join: {BOT_USER_NAME}?start={group_id}"
     )
 
 
