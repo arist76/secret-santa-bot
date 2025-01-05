@@ -34,7 +34,6 @@ class Group:
     def __init__(self, id: str, admin: User):
         self.id = id
         self.admin: User = admin
-        self.users: list[User] = []
         self.settings = Settings()
 
 
@@ -51,104 +50,96 @@ class UserFiniteState(Enum):
     NoGroup = 2
 
 
+class GroupStateException(Exception):
+    pass
+
+
 class GroupState:
-    __groups: dict[str, Group] = {}
-    __user_to_group: dict[str, str] = {}
-    __pending_requests: dict[str, list[str]] = {}
+    def __init__(self) -> None:
+        self.__groups: dict[str, Group] = {}
+        self.__user_to_group: dict[int, str] = {}
+        self.__pending_requests: dict[int, list[str]] = {}
 
-    @classmethod
-    def get_group(cls, group_id: str) -> Optional[Group]:
+    def get_group(self, group_id: str) -> Optional[Group]:
         """Get a group by its ID."""
-        return cls.__groups.get(group_id)
+        return self.__groups.get(group_id)
 
-    @classmethod
-    def get_user_group(cls, user_id: str) -> Optional[str]:
+    def get_user_group(self, user_id: int) -> Optional[str]:
         """Get the group ID the user belongs to."""
-        return cls.__user_to_group.get(user_id)
+        return self.__user_to_group.get(user_id)
 
-    @classmethod
-    def add_group(cls, group: Group) -> None:
+    def add_group(self, group: Group) -> None:
         """Add a new group."""
-        cls.__groups[group.id] = group
+        self.__groups[group.id] = group
 
-    @classmethod
-    def add_pending_request(cls, user_id: str, group_id: str) -> None:
-        """Add a pending join request for a user."""
-        if group_id not in cls.__groups:
-            raise ValueError("Group does not exist.")
-        if user_id in cls.__user_to_group:
-            raise ValueError("User is already part of a group.")
-        cls.__pending_requests.setdefault(user_id, []).append(group_id)
+    def add_pending_request(self, user_id: int, group_id: str) -> None:
+        """
+        Add a pending join request for a user.
+        Raises:
+            GroupStateException: If the group does not exist
+            GroupStateException: If the user is already part of a group.
+        """
+        if group_id not in self.__groups:
+            raise GroupStateException("Group does not exist.")
+        if user_id in self.__user_to_group:
+            raise GroupStateException("User is already part of a group.")
+        self.__pending_requests.setdefault(user_id, []).append(group_id)
 
-    @classmethod
-    def approve_pending_request(cls, user_id: str, group_id: str) -> None:
+    def approve_pending_request(self, user_id: int, group_id: str) -> None:
         """
         Approve a user's pending request and add them to the group.
         Also removes the request from the pending list.
         """
-        if (
-            user_id not in cls.__pending_requests
-            or group_id not in cls.__pending_requests[user_id]
-        ):
-            raise ValueError("No pending request found for this user and group.")
+        if group_id not in self.__groups:
+            raise GroupStateException("Group does not exist.")
+        if group_id not in self.__pending_requests.get(user_id, []):
+            raise GroupStateException(
+                "No pending request found for this user and group."
+            )
 
-        group = cls.get_group(group_id)
-        if not group:
-            raise ValueError("Group does not exist.")
+        # Add user to the group by updating the user-to-group mapping
+        self.__user_to_group[user_id] = group_id
 
-        # Add user to the group and map the user to the group
-        user = next((user for user in group.users if user.id == int(user_id)), None)
-        if user is None:
-            raise ValueError("User not found in the group.")
+        # Remove the pending request
+        self.__pending_requests.pop(user_id)
 
-        group.users.append(user)
-        cls.__user_to_group[user_id] = group_id
-
-        # Remove pending request
-        cls.__pending_requests[user_id].remove(group_id)
-        if not cls.__pending_requests[user_id]:
-            del cls.__pending_requests[user_id]
-
-    @classmethod
-    def remove_user_from_group(cls, user_id: str) -> None:
+    def remove_user_from_group(self, user_id: int) -> None:
         """
         Remove a user from their current group.
         """
-        group_id = cls.__user_to_group.pop(user_id, None)
+        group_id = self.__user_to_group.pop(user_id, None)
         if not group_id:
-            raise ValueError("User is not part of any group.")
+            raise GroupStateException("User is not part of any group.")
 
-        group = cls.get_group(group_id)
-        if not group:
-            raise ValueError("Group does not exist.")
-
-        group.users = [user for user in group.users if user.id != int(user_id)]
-
-    @classmethod
-    def get_pending_requests(cls, group_id: str) -> list[str]:
+    def get_pending_requests(self, group_id: str) -> list[int]:
         """Get all pending user IDs for a group."""
         return [
             user_id
-            for user_id, groups in cls.__pending_requests.items()
+            for user_id, groups in self.__pending_requests.items()
             if group_id in groups
         ]
 
-    @classmethod
-    def is_user_in_group(cls, user_id: str) -> bool:
+    def is_user_in_group(self, user_id: int) -> bool:
         """Check if a user is part of any group."""
-        return user_id in cls.__user_to_group
+        return user_id in self.__user_to_group
 
-    @classmethod
-    def is_user_pending(cls, user_id: str) -> bool:
-        return user_id in cls.__pending_requests
+    def is_user_pending(self, user_id: int) -> bool:
+        return user_id in self.__pending_requests
 
-    @classmethod
-    def get_all_groups(cls) -> dict[str, Group]:
+    def is_user_in_group_or_pending(self, user_id: int) -> bool:
+        return self.is_user_pending(user_id) or self.is_user_in_group(user_id)
+
+    def is_user_admin(self, user_id: int) -> bool:
+        for group in self.__groups.values():
+            if group.admin.id == user_id:
+                return True
+        return False
+
+    def get_all_groups(self) -> dict[str, Group]:
         """Get all groups."""
-        return cls.__groups
+        return self.__groups
 
 
-# Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Inputs:
@@ -191,7 +182,11 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("Create group command called")
     assert update.effective_user and update.effective_user.id
     assert update.message
-    groups: dict[str, Group] = context.bot_data
+
+    group_state: GroupState | None = context.bot_data.get("group_state", None)
+    if not group_state:
+        group_state = GroupState()
+        context.bot_data["group_state"] = group_state
 
     admin: User = update.effective_user
     group_id_token = secrets.token_hex(4)
@@ -200,22 +195,24 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group = Group(id=group_id, admin=admin)
 
     # check if the user is in a group or has a group
-    for group in groups.values():
-        if group.admin.id == update.effective_user.id:
-            logging.info(f"create group failed because user is in a group")
-            await update.message.reply_text("you are already in a group.")
-            return
+    if group_state.is_user_in_group_or_pending(
+        update.effective_user.id
+    ) or group_state.is_user_admin(update.effective_user.id):
+        logging.info(f"create group failed because user is in a group")
+        await update.message.reply_text("you are already in a group.")
+        return
 
-        for user in group.users:
-            if user.id == update.effective_user.id:
-                logging.info(f"create group failed because user is in a group")
-                await update.message.reply_text("you are already in a group.")
-                return
+    # add user to a pending group
+    try:
+        group_state.add_pending_request(update.effective_user.id, group.id)
+    except GroupStateException as e:
+        logging.info(f"create group failed because user is in a group")
+        await update.message.reply_text(str(e))
+        return
 
-    groups[group_id] = group
-    groups[pending_group_id] = deepcopy(group)
-    logging.info(f"Created group {group_id} by {update.effective_user.id}")
-
+    logging.info(
+        f"user {update.effective_user.id} added to pending group {pending_group_id} successfully"
+    )
     await update.message.reply_text(
         f"Group created successfully! Your group ID is: {group_id}\nShare this for others to join: {BOT_USER_NAME}?start={group_id}"
     )
