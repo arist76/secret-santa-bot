@@ -1,7 +1,7 @@
 import logging
 from copy import deepcopy
 from typing import Optional
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, User
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -28,10 +28,10 @@ PERSISTENCE_FILE = os.environ.get("PERSISTENT_PICKLE_PATH", "")
 
 
 # Data Models
-class User:
-    def __init__(self, user_id: int, first_name: str):
-        self.user_id = user_id
-        self.first_name = first_name
+# class User:
+#     def __init__(self, user_id: int, first_name: str):
+#         self.user_id = user_id
+#         self.first_name = first_name
 
 
 class Group:
@@ -93,9 +93,7 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.message
     groups: dict[str, Group] = context.bot_data
 
-    admin = User(
-        user_id=update.effective_user.id, first_name=update.effective_user.first_name
-    )
+    admin: User = update.effective_user
     group_id_token = secrets.token_hex(4)
     group_id = f"{GROUP_PREFIX}{group_id_token}"
     pending_group_id = f"{GROUP_PENDING_PREFIX}{group_id_token}"
@@ -103,13 +101,13 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # check if the user is in a group or has a group
     for group in groups.values():
-        if group.admin.user_id == update.effective_user.id:
+        if group.admin.id == update.effective_user.id:
             logging.info(f"create group failed because user is in a group")
             await update.message.reply_text("you are already in a group.")
             return
 
         for user in group.users:
-            if user.user_id == update.effective_user.id:
+            if user.id == update.effective_user.id:
                 logging.info(f"create group failed because user is in a group")
                 await update.message.reply_text("you are already in a group.")
                 return
@@ -145,11 +143,9 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     group_id_token = group_id.split("_")[1]
     group = groups[group_id]
     group_pending = groups[f"{GROUP_PENDING_PREFIX}{group_id_token}"]
-    user = User(
-        user_id=update.effective_user.id, first_name=update.effective_user.first_name
-    )
+    user: User = update.effective_user
 
-    if group.admin.user_id == user.user_id:
+    if group.admin.id == user.id:
         logging.info(f"Join group failed because user is admin")
         await update.message.reply_text("You cannot join your own group.")
         return
@@ -171,14 +167,14 @@ async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # TODO: send message to admin to accept the user
     await update.get_bot().send_message(
-        chat_id=group.admin.user_id,
-        text=f"User {user.user_id} has requested to join group {group_id}.",
+        chat_id=group.admin.id,
+        text=f"User {user.id} has requested to join group {group_id}.",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
                         "Accept",
-                        callback_data=f"accept@{user.user_id}#{user.first_name}",
+                        callback_data=f"accept@{user.id}#{user.first_name}",
                     )
                 ]
             ]
@@ -196,20 +192,18 @@ async def leave_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.message
     groups: dict[str, Group] = context.bot_data
 
-    user_id = update.effective_user.id
-
     for group in groups.values():
         for user in group.users:
-            if user.user_id == user_id:
+            if user == update.effective_user:
                 # also remove from request
 
-                if user.user_id == group.admin.user_id:
+                if user == group.admin:
                     logging.info(f"Leave group failed because user is admin")
                     await update.message.reply_text("You cannot leave your own group.")
                     return
 
                 logging.info(
-                    f"Leave group successful with user {user_id} leaving group {group.id}"
+                    f"Leave group successful with user {user.id} leaving group {group.id}"
                 )
                 group.users.remove(user)
                 await update.message.reply_text("You have left the group.")
@@ -227,15 +221,16 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     for group in groups.values():
-        if group.admin.user_id == user_id or user_id not in [
-            user.user_id for user in group.users
-        ]:
+        if (
+            group.admin == update.effective_user
+            or update.effective_user not in group.users
+        ):
 
             settings = group.settings
             settings_text = get_settings_message(settings)
             reply_markup = InlineKeyboardMarkup(get_settings_keyboard())
 
-            is_admin = group.admin.user_id == user_id
+            is_admin = group.admin == update.effective_user
 
             logging.info(
                 f"settings command successfull" + (" admin buttons" if is_admin else "")
@@ -256,9 +251,11 @@ async def all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     for group in groups.values():
-        is_admin = group.admin.user_id == user_id
-        if is_admin or user_id in [user.user_id for user in group.users]:
-            user_list = "\n".join([str(user.first_name) for user in group.users])
+        is_admin = group.admin == update.effective_user
+        if is_admin or user_id in group.users:
+            user_list = "\n".join(
+                [f"{i+1} - {user.first_name}" for i, user in enumerate(group.users)]
+            )
             await update.message.reply_text(
                 f"Users in the group:\n{group.admin.first_name}\n{user_list}"
             )
@@ -284,27 +281,31 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
         requesting_user_id = user_details[0]
         first_name = user_details[1]
         for group in groups.values():
-            if group.admin.user_id == user_id and group.id.startswith(
+            if group.admin == update.effective_user and group.id.startswith(
                 GROUP_PENDING_PREFIX
             ):
                 print(
                     f"Removing user {requesting_user_id} from pending group {group.id}"
                 )
                 group.users = list(
-                    filter(lambda x: x.user_id != requesting_user_id, group.users)
+                    filter(lambda x: x.id != requesting_user_id, group.users)
                 )
 
-            if group.admin.user_id == user_id and group.id.startswith(GROUP_PREFIX):
+            if group.admin == update.effective_user and group.id.startswith(
+                GROUP_PREFIX
+            ):
                 print(f"Adding user {requesting_user_id} to group {group.id}")
                 group.users.append(
-                    User(user_id=int(requesting_user_id), first_name=first_name)
+                    User(
+                        id=int(requesting_user_id), first_name=first_name, is_bot=False
+                    )
                 )
                 await query.edit_message_text("User accepted.")
 
             return
 
     for group in groups.values():
-        if group.admin.user_id == user_id:
+        if group.admin == update.effective_user:
             if context.chat_data and query.data == "change_deadline":
                 context.chat_data["deadline_change"] = True
                 await query.edit_message_text(
@@ -339,10 +340,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.chat_data and context.chat_data.get("deadline_change"):
 
         for group in groups.values():
-            if group.admin.user_id == user_id:
+            if group.admin == update.effective_user:
                 try:
+                    assert update.message.text
                     deadline = int(update.message.text)
-                except:
+                except AssertionError as e:
                     await update.message.reply_text(
                         "Invalid deadline. Please send a number of seconds."
                     )
@@ -375,7 +377,7 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_group = None
     for group in groups.values():
         for user in group.users:
-            is_admin = group.admin.user_id == user_id
+            is_admin = group.admin == update.effective_user
             if is_admin:
                 admin_group = group
                 break
@@ -401,7 +403,7 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for giver, receiver in pairings.items():
         await context.bot.send_message(
-            chat_id=giver.user_id,
+            chat_id=giver.id,
             text=f"You're Secret Santa match is {receiver.first_name}!\n",
         )
 
