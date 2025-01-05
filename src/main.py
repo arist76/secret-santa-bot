@@ -11,6 +11,7 @@ from telegram.ext import (
     PicklePersistence,
     filters,
 )
+from enum import Enum
 from datetime import datetime, timedelta
 import secrets
 import random
@@ -25,13 +26,8 @@ logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
 
 BOT_USER_NAME = "t.me/gena_secret_santa_bot"
 PERSISTENCE_FILE = os.environ.get("PERSISTENT_PICKLE_PATH", "")
-
-
-# Data Models
-# class User:
-#     def __init__(self, user_id: int, first_name: str):
-#         self.user_id = user_id
-#         self.first_name = first_name
+GROUP_PREFIX = "group_"
+GROUP_PENDING_PREFIX = "pending_"
 
 
 class Group:
@@ -49,26 +45,130 @@ class Settings:
         self.include_admin = False
 
 
-GROUP_PREFIX = "group_"
-GROUP_PENDING_PREFIX = "pending_"
+class UserFiniteState(Enum):
+    JoinedGroup = 0
+    PendingGroup = 1
+    NoGroup = 2
+
+
+class GroupState:
+    __groups: dict[str, Group] = {}
+    __user_to_group: dict[str, str] = {}
+    __pending_requests: dict[str, list[str]] = {}
+
+    @classmethod
+    def get_group(cls, group_id: str) -> Optional[Group]:
+        """Get a group by its ID."""
+        return cls.__groups.get(group_id)
+
+    @classmethod
+    def get_user_group(cls, user_id: str) -> Optional[str]:
+        """Get the group ID the user belongs to."""
+        return cls.__user_to_group.get(user_id)
+
+    @classmethod
+    def add_group(cls, group: Group) -> None:
+        """Add a new group."""
+        cls.__groups[group.id] = group
+
+    @classmethod
+    def add_pending_request(cls, user_id: str, group_id: str) -> None:
+        """Add a pending join request for a user."""
+        if group_id not in cls.__groups:
+            raise ValueError("Group does not exist.")
+        if user_id in cls.__user_to_group:
+            raise ValueError("User is already part of a group.")
+        cls.__pending_requests.setdefault(user_id, []).append(group_id)
+
+    @classmethod
+    def approve_pending_request(cls, user_id: str, group_id: str) -> None:
+        """
+        Approve a user's pending request and add them to the group.
+        Also removes the request from the pending list.
+        """
+        if (
+            user_id not in cls.__pending_requests
+            or group_id not in cls.__pending_requests[user_id]
+        ):
+            raise ValueError("No pending request found for this user and group.")
+
+        group = cls.get_group(group_id)
+        if not group:
+            raise ValueError("Group does not exist.")
+
+        # Add user to the group and map the user to the group
+        user = next((user for user in group.users if user.id == int(user_id)), None)
+        if user is None:
+            raise ValueError("User not found in the group.")
+
+        group.users.append(user)
+        cls.__user_to_group[user_id] = group_id
+
+        # Remove pending request
+        cls.__pending_requests[user_id].remove(group_id)
+        if not cls.__pending_requests[user_id]:
+            del cls.__pending_requests[user_id]
+
+    @classmethod
+    def remove_user_from_group(cls, user_id: str) -> None:
+        """
+        Remove a user from their current group.
+        """
+        group_id = cls.__user_to_group.pop(user_id, None)
+        if not group_id:
+            raise ValueError("User is not part of any group.")
+
+        group = cls.get_group(group_id)
+        if not group:
+            raise ValueError("Group does not exist.")
+
+        group.users = [user for user in group.users if user.id != int(user_id)]
+
+    @classmethod
+    def get_pending_requests(cls, group_id: str) -> list[str]:
+        """Get all pending user IDs for a group."""
+        return [
+            user_id
+            for user_id, groups in cls.__pending_requests.items()
+            if group_id in groups
+        ]
+
+    @classmethod
+    def is_user_in_group(cls, user_id: str) -> bool:
+        """Check if a user is part of any group."""
+        return user_id in cls.__user_to_group
+
+    @classmethod
+    def is_user_pending(cls, user_id: str) -> bool:
+        return user_id in cls.__pending_requests
+
+    @classmethod
+    def get_all_groups(cls) -> dict[str, Group]:
+        """Get all groups."""
+        return cls.__groups
 
 
 # Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Inputs:
+        - normal start: should send welcome message
+        - with args: should join other groups
+        - with other state
+    """
     logging.info("Bot started")
-    args = context.args
 
+    assert update.message
+    await update.message.reply_text(
+        "Welcome to the Secret Santa Bot! Use /help for available commands."
+    )
+
+    args = context.args
     print(f"start command called with args {args}")
     if args and len(args) > 0:
         print("executing start to join_gorup")
         # execute the join_gorup command
         await join_group(update, context)
-
-    assert update.message
-
-    await update.message.reply_text(
-        "Welcome to the Secret Santa Bot! Use /help for available commands."
-    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -370,8 +470,6 @@ async def start_matching(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_chat
     assert update.message
     groups: dict[str, Group] = context.bot_data
-
-    user_id = update.effective_user.id
 
     # Find the group of the admin
     admin_group = None
