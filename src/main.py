@@ -192,39 +192,27 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     assert update.effective_user and update.effective_user.id
     assert update.message
 
-    group_state: GroupState | None = context.bot_data.get("group_state", None)
-    if not group_state:
-        group_state = GroupState()
-        context.bot_data["group_state"] = group_state
-
-    admin: User = update.effective_user
-    group_id_token = secrets.token_hex(4)
-    group_id = f"{GROUP_PREFIX}{group_id_token}"
-    pending_group_id = f"{GROUP_PENDING_PREFIX}{group_id_token}"
-    group = Group(id=group_id, admin=admin)
+    group_state: GroupState = context.bot_data.setdefault("group_state", GroupState())
+    group = Group(id=update.effective_user.id, admin=update.effective_user)
 
     # check if the user is in a group or has a group
     if group_state.is_user_in_group_or_pending(
-        update.effective_user.id
-    ) or group_state.is_user_admin(update.effective_user.id):
+        update.effective_user
+    ) or group_state.is_user_admin(update.effective_user):
         logging.info(f"create group failed because user is in a group")
         await update.message.reply_text("you are already in a group.")
         return
 
-    # add user to a pending group
-    try:
-        group_state.add_pending_request(update.effective_user.id, group.id)
-    except GroupStateException as e:
-        logging.info(f"create group failed because user is in a group")
-        await update.message.reply_text(str(e))
-        return
+    # create a user for the admin
+    group_state.add_group(group)
 
     logging.info(
-        f"user {update.effective_user.id} added to pending group {pending_group_id} successfully"
+        f"CREATE_GROUP: successfull with user {update.effective_user.id} creating group {group.id}"
     )
     await update.message.reply_text(
-        f"Group created successfully! Your group ID is: {group_id}\nShare this for others to join: {BOT_USER_NAME}?start={group_id}"
+        f"Group created successfully! Your group ID is: {group.id}\nShare this for others to join: {BOT_USER_NAME}?start={group.id}"
     )
+    print("Group State: \n", context.bot_data["group_state"].get_all_groups())
 
 
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
