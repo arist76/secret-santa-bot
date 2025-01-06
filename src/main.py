@@ -31,7 +31,7 @@ GROUP_PENDING_PREFIX = "pending_"
 
 
 class Group:
-    def __init__(self, id: str, admin: User):
+    def __init__(self, id: int, admin: User):
         self.id = id
         self.admin: User = admin
         self.settings = Settings()
@@ -56,23 +56,23 @@ class GroupStateException(Exception):
 
 class GroupState:
     def __init__(self) -> None:
-        self.__groups: dict[str, Group] = {}
-        self.__user_to_group: dict[int, str] = {}
-        self.__pending_requests: dict[int, list[str]] = {}
+        self.__groups: dict[int, Group] = {}
+        self.__user_to_group: dict[int, tuple[User, int]] = {}
+        self.__pending_requests: dict[int, tuple[User, list[int]]] = {}
 
-    def get_group(self, group_id: str) -> Optional[Group]:
+    def get_group(self, group_id: int) -> Optional[Group]:
         """Get a group by its ID."""
         return self.__groups.get(group_id)
 
-    def get_user_group(self, user_id: int) -> Optional[str]:
+    def get_user_group(self, user_id: int) -> Optional[int]:
         """Get the group ID the user belongs to."""
-        return self.__user_to_group.get(user_id)
+        return self.__user_to_group.get(user_id, (None, None))[1]
 
     def add_group(self, group: Group) -> None:
         """Add a new group."""
         self.__groups[group.id] = group
 
-    def add_pending_request(self, user_id: int, group_id: str) -> None:
+    def add_pending_request(self, user: User, group_id: int) -> None:
         """
         Add a pending join request for a user.
         Raises:
@@ -81,61 +81,70 @@ class GroupState:
         """
         if group_id not in self.__groups:
             raise GroupStateException("Group does not exist.")
-        if user_id in self.__user_to_group:
+        if user.id in self.__user_to_group:
             raise GroupStateException("User is already part of a group.")
-        self.__pending_requests.setdefault(user_id, []).append(group_id)
 
-    def approve_pending_request(self, user_id: int, group_id: str) -> None:
+        self.__pending_requests.setdefault(user.id, (user, []))[1].append(group_id)
+
+    def approve_pending_request(self, user: User, group_id: int) -> None:
         """
         Approve a user's pending request and add them to the group.
         Also removes the request from the pending list.
         """
         if group_id not in self.__groups:
             raise GroupStateException("Group does not exist.")
-        if group_id not in self.__pending_requests.get(user_id, []):
+        if group_id not in self.__pending_requests.get(user.id, (None, []))[1]:
             raise GroupStateException(
                 "No pending request found for this user and group."
             )
 
         # Add user to the group by updating the user-to-group mapping
-        self.__user_to_group[user_id] = group_id
+        self.__user_to_group[user.id] = (user, group_id)
 
         # Remove the pending request
-        self.__pending_requests.pop(user_id)
+        self.__pending_requests.pop(user.id)
 
-    def remove_user_from_group(self, user_id: int) -> None:
+    def remove_user_from_group(self, user: User) -> None:
         """
         Remove a user from their current group.
         """
-        group_id = self.__user_to_group.pop(user_id, None)
+        group_id = self.__user_to_group.pop(user.id, None)
         if not group_id:
             raise GroupStateException("User is not part of any group.")
 
-    def get_pending_requests(self, group_id: str) -> list[int]:
-        """Get all pending user IDs for a group."""
+    def remove_user_from_pending_group(self, user: User) -> None:
+        """
+        Remove a user from their current pending group.
+        """
+        group_id = self.__pending_requests.pop(user.id, None)
+        if not group_id:
+            raise GroupStateException("User is not pending to join any group.")
+
+    def get_pending_requests(self, group_id: int) -> list[User]:
+        """Get all pending user for a group."""
         return [
-            user_id
+            groups[0]
             for user_id, groups in self.__pending_requests.items()
-            if group_id in groups
+            if group_id in groups[1]
         ]
 
-    def is_user_in_group(self, user_id: int) -> bool:
+    def is_user_in_group(self, user: User) -> bool:
         """Check if a user is part of any group."""
-        return user_id in self.__user_to_group
+        return user.id in self.__user_to_group
 
-    def is_user_pending(self, user_id: int) -> bool:
-        return user_id in self.__pending_requests
+    def is_user_pending(self, user: User) -> bool:
+        return user.id in self.__pending_requests
 
-    def is_user_in_group_or_pending(self, user_id: int) -> bool:
-        return self.is_user_pending(user_id) or self.is_user_in_group(user_id)
+    def is_user_in_group_or_pending(self, user: User) -> bool:
+        return self.is_user_pending(user) or self.is_user_in_group(user)
 
-    def is_user_admin(self, user_id: int) -> bool:
+    def is_user_admin(self, user: User) -> bool:
         for group in self.__groups.values():
-            if group.admin.id == user_id:
+            if group.admin.id == user.id:
                 return True
         return False
 
-    def get_all_groups(self) -> dict[str, Group]:
+    def get_all_groups(self) -> dict[int, Group]:
         """Get all groups."""
         return self.__groups
 
