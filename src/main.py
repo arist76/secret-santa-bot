@@ -128,6 +128,11 @@ class GroupState:
             if group_id in groups[1]
         ]
 
+    def get_pending_request_for_user(
+        self, user_id: int
+    ) -> Optional[tuple[User, list[int]]]:
+        return self.__pending_requests.get(user_id)
+
     def is_user_in_group(self, user: User) -> bool:
         """Check if a user is part of any group."""
         return user.id in self.__user_to_group
@@ -164,9 +169,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     args = context.args
-    print(f"start command called with args {args}")
     if args and len(args) > 0:
-        print("executing start to join_gorup")
+        logging.info(
+            f"START: Bot started with arguments, user {update.effective_user.first_name if update.effective_user else 'Unkown'} joining group {args[0]}"
+        )
         # execute the join_gorup command
         await join_group(update, context)
 
@@ -216,65 +222,65 @@ async def create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    State Before:
+        - group_id(in args) should already exist in __groups
+        - user should not be in any group, that is:
+            - user should not be in __user_to_group
+            - user should not be admin of any group in __group
+
+    State After:
+        - user is in __pending_requests for the group_id(in args)
+        - user removed from any pending requests
+    """
     logging.info("Join group command called")
     assert update.effective_user and update.effective_user.id
     assert update.message
-    assert context.args is not None
-    groups: dict[str, Group] = context.bot_data
 
-    if len(context.args) < 1:
+    group_state: GroupState = context.bot_data.setdefault("group_state", GroupState())
+
+    if context.args and len(context.args) < 1:
         logging.info("Join group has no arguments")
         await update.message.reply_text("Usage: /join_group <group_id>")
         return
 
+    assert context.args
     group_id = context.args[0]
-    logging.info(f"Join group has group id {group_id}")
-    if group_id not in groups:
+
+    if group_id not in group_state.get_all_groups():
         logging.info(f"Join group has invalid group id {group_id}")
         await update.message.reply_text("Invalid group ID.")
         return
 
-    group_id_token = group_id.split("_")[1]
-    group = groups[group_id]
-    group_pending = groups[f"{GROUP_PENDING_PREFIX}{group_id_token}"]
-    user: User = update.effective_user
-
-    if group.admin.id == user.id:
-        logging.info(f"Join group failed because user is admin")
-        await update.message.reply_text("You cannot join your own group.")
+    if group_state.is_user_in_group(update.effective_user) or group_state.is_user_admin(
+        update.effective_user
+    ):
+        logging.info(f"Join group failed because user is in a group")
+        await update.message.reply_text("You are already in a group.")
         return
 
-    if user in group_pending.users:
-        logging.info(f"Join group failed becuase user has already requested to join")
-        await update.message.reply_text(
-            "You have already requested to join this group. and your request is still pending."
-        )
-        return
+    group_state.add_pending_request(update.effective_user, group_id)
+    group_state.remove_user_from_group(update.effective_user)
 
-    if user in group.users:
-        logging.info(f"Join group failed because user has already joined")
-        await update.message.reply_text("You are already in the group.")
-        return
-
-    logging.info(f"Join group succesfully added to a pending group")
-    group_pending.users.append(user)
+    group = group_state.get_group(group_id)
+    assert group is not None  # group should be guaranteed to exist here
 
     # TODO: send message to admin to accept the user
     await update.get_bot().send_message(
         chat_id=group.admin.id,
-        text=f"User {user.id} has requested to join group {group_id}.",
+        text=f"User {update.effective_user.first_name} has requested to join group {group_id}.",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
                         "Accept",
-                        callback_data=f"accept@{user.id}#{user.first_name}",
+                        callback_data=f"accept@{update.effective_user.id}",
                     )
                 ]
             ]
         ),
     )
-
+    #
     await update.message.reply_text(
         f"You have requested to join group {group_id}. Please wait for admin approval."
     )
@@ -362,43 +368,65 @@ async def handle_settings_change(update: Update, context: ContextTypes.DEFAULT_T
     assert update.effective_user and update.effective_user.id
     assert update.callback_query
 
-    groups: dict[str, Group] = context.bot_data
+    group_state: GroupState = context.bot_data.setdefault("group_state", GroupState())
     query = update.callback_query
-
     await query.answer()
 
-    user_id = update.effective_user.id
-
     if query.data and query.data.startswith("accept@"):
-        print("accepting user!!!")
-        user_details = query.data.split("@")[1].split("#")
-        requesting_user_id = user_details[0]
-        first_name = user_details[1]
-        for group in groups.values():
-            if group.admin == update.effective_user and group.id.startswith(
-                GROUP_PENDING_PREFIX
-            ):
-                print(
-                    f"Removing user {requesting_user_id} from pending group {group.id}"
-                )
-                group.users = list(
-                    filter(lambda x: x.id != requesting_user_id, group.users)
-                )
+        """
+        State Before:
+            - user is in pending group
+            - user is not in group
 
-            if group.admin == update.effective_user and group.id.startswith(
-                GROUP_PREFIX
-            ):
-                print(f"Adding user {requesting_user_id} to group {group.id}")
-                group.users.append(
-                    User(
-                        id=int(requesting_user_id), first_name=first_name, is_bot=False
-                    )
-                )
-                await query.edit_message_text("User accepted.")
+        State After:
+            - user is in group
+            - user is not in group
+        """
+        user_details = query.data.split("@")[1]
+        user = group_state.get_pending_request_for_user(int(user_details))
 
+        if user and group_state.is_user_in_group(user[0]):
+            logging.info("Accept command failed because user is in a group")
+            await update.callback_query.edit_message_text("You are already in a group.")
+            await update.callback_query.edit_message_reply_markup(None)
+            return
+        #
+        # if not user or user[1]:
+        #     logging.info("Accept command failed because user is not in pending group")
+        #     await update.callback_query.edit_message_text("Sorry the user has not requested to join any group")
+        #     await update.callback_query.edit_message_reply_markup(None)
+
+        if user and group_state.is_user_admin(user[0]):
+            logging.info("Accept command failed because user is admin")
+            await update.callback_query.edit_message_text("You are already in a group.")
+            await update.callback_query.edit_message_reply_markup(None)
             return
 
-    for group in groups.values():
+        for group_id, group in group_state.get_all_groups().items():
+            if group.admin == update.effective_user:  # get admin group
+                # check if the user is pending in the same group
+                if user and group.id not in user[1]:
+                    logging.info(
+                        "Accept command failed because user is not in pending group"
+                    )
+                    await update.callback_query.edit_message_text(
+                        "Sorry the user has not requested to join any group"
+                    )
+                    await update.callback_query.edit_message_reply_markup(None)
+                    return
+
+                assert user is not None
+                group_state.add_pending_request(user[0], group_id)
+                await update.callback_query.edit_message_text("User accepted.")
+                await update.callback_query.edit_message_reply_markup(None)
+                return
+
+        await update.callback_query.edit_message_text(
+            "You are not qualified to add a user to a group."
+        )
+        await update.callback_query.edit_message_reply_markup(None)
+
+    for group_id, group in group_state.get_all_groups().items():
         if group.admin == update.effective_user:
             if context.chat_data and query.data == "change_deadline":
                 context.chat_data["deadline_change"] = True
